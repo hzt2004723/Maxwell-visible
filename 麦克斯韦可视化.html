@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>电磁场边界条件互动可视化</title>
+    
+    <!-- 引入 Tailwind CSS 进行现代 UI 样式设计 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 引入 Three.js 用于 3D 渲染 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <!-- 引入 OrbitControls 用于触摸/鼠标控制 3D 视角 -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <style>
+        body { 
+            margin: 0; overflow: hidden; background-color: #111827; 
+            color: #e5e7eb; font-family: 'Inter', sans-serif; 
+            /* 阻止移动端长按选中文本和双击缩放 */
+            user-select: none; -webkit-user-select: none;
+        }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+        
+        #ui-panel {
+            position: absolute; 
+            top: 10px; right: 10px; 
+            width: calc(100vw - 20px); max-width: 380px; 
+            max-height: calc(100vh - 20px);
+            z-index: 10; background: rgba(31, 41, 55, 0.85); backdrop-filter: blur(10px);
+            border-radius: 1rem; border: 1px solid rgba(255, 255, 255, 0.1); 
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            display: flex; flex-direction: column; transition: all 0.3s ease;
+            /* 优化移动端触控体验 */
+            touch-action: manipulation;
+        }
+        
+        @media (min-width: 768px) {
+            #ui-panel { top: 20px; right: 20px; }
+        }
+        
+        #ui-content {
+            overflow-y: auto;
+            transition: max-height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
+        }
+
+        .toggle-btn { transition: all 0.2s ease; }
+        .toggle-btn.active { box-shadow: inset 0 0 0 2px currentColor; }
+        
+        #ui-content::-webkit-scrollbar { width: 6px; }
+        #ui-content::-webkit-scrollbar-track { background: rgba(0,0,0,0.1); }
+        #ui-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+        
+        #collapse-icon { transition: transform 0.3s ease; }
+        .collapsed #collapse-icon { transform: rotate(180deg); }
+
+        /* 数学公式简易样式 */
+        .math { font-family: 'Times New Roman', Times, serif; font-style: italic; }
+        .vector { font-weight: bold; font-style: normal; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-panel">
+        <div class="flex justify-between items-center p-4 md:p-5 border-b border-gray-700/50">
+            <h1 class="text-base md:text-lg font-bold text-white">电磁场边界条件解析</h1>
+            <button id="btn-collapse" class="text-gray-400 hover:text-white focus:outline-none p-1 rounded-md hover:bg-gray-700/50">
+                <svg id="collapse-icon" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"></path>
+                </svg>
+            </button>
+        </div>
+
+        <div id="ui-content" class="p-4 md:p-5 pt-4">
+            <p class="text-xs text-gray-400 mb-5">
+                理想导电壁限定区域 ( <span class="math">0 &le; x &le; a</span> ) 内的 <span class="math">TE<sub>10</sub></span> 模电磁场可视化。
+            </p>
+
+            <!-- 视图控制区 -->
+            <div class="mb-5 space-y-2.5">
+                <h2 class="text-xs font-semibold uppercase tracking-wider text-gray-400">图层控制 (图例)</h2>
+                
+                <button id="btn-e" class="toggle-btn active w-full flex items-center justify-between p-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-red-400 border border-gray-700">
+                    <span class="text-sm font-medium">显示电场 (E)</span>
+                    <div class="w-3 h-3 rounded-full bg-red-500"></div>
+                </button>
+                
+                <button id="btn-h" class="toggle-btn active w-full flex items-center justify-between p-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-blue-400 border border-gray-700">
+                    <span class="text-sm font-medium">显示磁场 (H)</span>
+                    <div class="w-3 h-3 rounded-full bg-blue-500"></div>
+                </button>
+                
+                <button id="btn-j" class="toggle-btn active w-full flex items-center justify-between p-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-yellow-400 border border-gray-700">
+                    <span class="text-sm font-medium">显示表面电流 (J<sub>s</sub>)</span>
+                    <div class="w-3 h-3 rounded-full bg-yellow-400"></div>
+                </button>
+                
+                <button id="btn-n" class="toggle-btn w-full flex items-center justify-between p-2.5 rounded-lg bg-gray-800 hover:bg-gray-700 text-green-400 border border-gray-700">
+                    <span class="text-sm font-medium">显示法向量 (n)</span>
+                    <div class="w-3 h-3 rounded-full bg-green-500"></div>
+                </button>
+            </div>
+
+            <!-- 动画控制区 -->
+            <div class="mb-5 bg-gray-800 p-3 rounded-lg border border-gray-700">
+                <div class="flex justify-between items-center mb-2">
+                    <h2 class="text-xs font-semibold text-gray-300">时间 (t)</h2>
+                    <button id="btn-play" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1 rounded shadow">暂停</button>
+                </div>
+                <input type="range" id="time-slider" min="0" max="20" step="0.01" value="0" class="w-full cursor-pointer accent-indigo-500">
+            </div>
+
+            <!-- 理论解析区 -->
+            <div class="space-y-3 text-xs md:text-sm text-gray-300 tracking-wide">
+                <div class="bg-gray-800/50 p-2.5 rounded-md border border-gray-700/50">
+                    <p class="font-bold text-white mb-1">1. 法向量与边界</p>
+                    <p>导电壁位于 <span class="math">x = 0</span> 和 <span class="math">x = a</span>。指向内部的法向量分别为 <span class="math"><span class="vector">n</span> = <span class="vector">x&#770;</span></span> 和 <span class="math"><span class="vector">n</span> = -<span class="vector">x&#770;</span></span>。</p>
+                </div>
+                
+                <div class="bg-gray-800/50 p-2.5 rounded-md border border-gray-700/50">
+                    <p class="font-bold text-white mb-1">2. 电场边界条件</p>
+                    <p><span class="math text-red-300"><span class="vector">n</span> &times; <span class="vector">E</span> = 0</span> (切向电场为0)。</p>
+                    <p>由于 <span class="math">E<sub>y</sub> &propto; sin(&pi;x/a)</span>，在两壁上为 0。</p>
+                </div>
+                
+                <div class="bg-gray-800/50 p-2.5 rounded-md border border-gray-700/50">
+                    <p class="font-bold text-white mb-1">3. 表面电流激生</p>
+                    <p><span class="math text-yellow-300"><span class="vector">J</span><sub>s</sub> = <span class="vector">n</span> &times; <span class="vector">H</span></span></p>
+                    <p>磁场到达壁面时突变，激发黄色电流。在 <span class="math">x=0</span> 处：<span class="math"><span class="vector">x&#770;</span> &times; (H<sub>z</sub><span class="vector">z&#770;</span>) = -H<sub>z</sub><span class="vector">y&#770;</span></span>。</p>
+                </div>
+            </div>
+            
+            <div class="mt-3 text-[10px] md:text-xs text-gray-500 text-center">
+                提示：单指旋转，双指缩放/平移
+            </div>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script>
+        // --- UI 面板收起/展开逻辑 ---
+        const btnCollapse = document.getElementById('btn-collapse');
+        const uiPanel = document.getElementById('ui-panel');
+        const uiContent = document.getElementById('ui-content');
+        let isCollapsed = false;
+
+        function togglePanel(forceCollapse = null) {
+            isCollapsed = forceCollapse !== null ? forceCollapse : !isCollapsed;
+            if (isCollapsed) {
+                uiPanel.classList.add('collapsed');
+                uiContent.style.maxHeight = '0px';
+                uiContent.style.opacity = '0';
+                uiContent.style.paddingTop = '0px';
+                uiContent.style.paddingBottom = '0px';
+                uiContent.style.overflow = 'hidden';
+            } else {
+                uiPanel.classList.remove('collapsed');
+                uiContent.style.maxHeight = '1000px'; 
+                uiContent.style.opacity = '1';
+                uiContent.style.paddingTop = '1rem'; 
+                uiContent.style.paddingBottom = '1rem';
+                setTimeout(() => {
+                    if (!isCollapsed) uiContent.style.overflow = 'auto';
+                }, 300);
+            }
+        }
+
+        btnCollapse.addEventListener('click', () => togglePanel());
+
+        if (window.innerWidth < 768) {
+            togglePanel(true);
+        }
+
+        // --- Three.js 与可视化逻辑 ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('#111827');
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(20, 15, 30);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
+        container.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.target.set(5, 0, 10);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 20, 10);
+        scene.add(directionalLight);
+
+        // --- 坐标轴与文字标注 ---
+        const axesPos = new THREE.Vector3(-1, -6, -1);
+        const axisLength = 3.5;
+        const axesHelper = new THREE.AxesHelper(axisLength);
+        axesHelper.position.copy(axesPos);
+        scene.add(axesHelper);
+
+        function createTextSprite(text, colorStr) {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64; canvas.height = 64;
+            const ctx = canvas.getContext('2d');
+            ctx.font = 'Bold 40px Arial';
+            ctx.fillStyle = colorStr;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(text, 32, 32);
+
+            const texture = new THREE.CanvasTexture(canvas);
+            const material = new THREE.SpriteMaterial({ 
+                map: texture, 
+                depthTest: false 
+            });
+            const sprite = new THREE.Sprite(material);
+            sprite.scale.set(2, 2, 1);
+            return sprite;
+        }
+
+        const spriteX = createTextSprite('x', '#EF4444');
+        spriteX.position.set(axesPos.x + axisLength + 0.5, axesPos.y, axesPos.z);
+        scene.add(spriteX);
+
+        const spriteY = createTextSprite('y', '#10B981');
+        spriteY.position.set(axesPos.x, axesPos.y + axisLength + 0.5, axesPos.z);
+        scene.add(spriteY);
+
+        const spriteZ = createTextSprite('z', '#3B82F6');
+        spriteZ.position.set(axesPos.x, axesPos.y, axesPos.z + axisLength + 0.5);
+        scene.add(spriteZ);
+
+        // --- 物理场数据配置 ---
+        const a = 10; 
+        const lengthZ = 25; 
+        const k = 1; 
+        const omega = 1; 
+        const H0 = 3; 
+        const E0 = 3; 
+
+        let time = 0;
+        let isPlaying = true;
+        let showE = true;
+        let showH = true;
+        let showJ = true;
+        let showN = false;
+
+        const eArrows = [];
+        const hArrows = [];
+        const jArrows = [];
+        const nArrows = [];
+
+        function createWalls() {
+            const wallMaterial = new THREE.MeshPhysicalMaterial({ 
+                color: 0x4B5563, 
+                transparent: true, 
+                opacity: 0.3,
+                side: THREE.DoubleSide,
+                metalness: 0.8,
+                roughness: 0.2
+            });
+
+            const wall1Geo = new THREE.PlaneGeometry(lengthZ, 12);
+            const wall1 = new THREE.Mesh(wall1Geo, wallMaterial);
+            wall1.rotation.y = Math.PI / 2;
+            wall1.position.set(0, 0, lengthZ / 2);
+            scene.add(wall1);
+
+            const wall2 = new THREE.Mesh(wall1Geo, wallMaterial);
+            wall2.rotation.y = Math.PI / 2;
+            wall2.position.set(a, 0, lengthZ / 2);
+            scene.add(wall2);
+
+            const edges = new THREE.EdgesGeometry(wall1Geo);
+            const lineMat = new THREE.LineBasicMaterial({ color: 0x9CA3AF, linewidth: 2 });
+            const line1 = new THREE.LineSegments(edges, lineMat);
+            wall1.add(line1);
+            const line2 = new THREE.LineSegments(edges, lineMat);
+            wall2.add(line2);
+        }
+        createWalls();
+
+        function initVectorFields() {
+            const gridPointsX = 7;
+            const gridPointsZ = 20;
+
+            const colorE = 0xEF4444; 
+            const colorH = 0x3B82F6; 
+            const colorJ = 0xFBBF24; 
+            const colorN = 0x10B981; 
+
+            for (let i = 0; i <= gridPointsX; i++) {
+                let x = (i / gridPointsX) * a;
+                for (let j = 0; j <= gridPointsZ; j++) {
+                    let z = (j / gridPointsZ) * lengthZ;
+                    let origin = new THREE.Vector3(x, 0, z);
+
+                    let eArrow = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), origin, 0.1, colorE, 0.5, 0.3);
+                    scene.add(eArrow);
+                    eArrows.push({ arrow: eArrow, x: x, z: z });
+
+                    let hArrow = new THREE.ArrowHelper(new THREE.Vector3(1,0,0), origin, 0.1, colorH, 0.4, 0.3);
+                    scene.add(hArrow);
+                    hArrows.push({ arrow: hArrow, x: x, z: z });
+                }
+            }
+
+            const jPointsZ = 25;
+            for(let j=0; j<=jPointsZ; j++) {
+                let z = (j / jPointsZ) * lengthZ;
+                
+                let jArrow1 = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(0, 0, z), 0.1, colorJ, 0.6, 0.4);
+                scene.add(jArrow1);
+                jArrows.push({ arrow: jArrow1, x: 0, z: z });
+
+                let jArrow2 = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(a, 0, z), 0.1, colorJ, 0.6, 0.4);
+                scene.add(jArrow2);
+                jArrows.push({ arrow: jArrow2, x: a, z: z });
+            }
+
+            for(let j=0; j<=5; j++) {
+                let z = (j / 5) * lengthZ;
+                let nArrow1 = new THREE.ArrowHelper(new THREE.Vector3(1,0,0), new THREE.Vector3(0, 0, z), 2, colorN, 0.8, 0.5);
+                nArrow1.visible = showN;
+                scene.add(nArrow1);
+                nArrows.push(nArrow1);
+
+                let nArrow2 = new THREE.ArrowHelper(new THREE.Vector3(-1,0,0), new THREE.Vector3(a, 0, z), 2, colorN, 0.8, 0.5);
+                nArrow2.visible = showN;
+                scene.add(nArrow2);
+                nArrows.push(nArrow2);
+            }
+        }
+        initVectorFields();
+
+        function updateVectors(t) {
+            eArrows.forEach(item => {
+                let Ey = E0 * Math.sin(Math.PI * item.x / a) * Math.sin(k * item.z - omega * t);
+                item.arrow.visible = showE;
+                if(Math.abs(Ey) > 0.01 && showE) {
+                    item.arrow.setDirection(new THREE.Vector3(0, Math.sign(Ey), 0));
+                    item.arrow.setLength(Math.abs(Ey), 0.5, 0.3);
+                } else {
+                    item.arrow.visible = false; 
+                }
+            });
+
+            hArrows.forEach(item => {
+                let Hx = H0 * Math.sin(Math.PI * item.x / a) * Math.sin(k * item.z - omega * t);
+                let Hz = H0 * Math.cos(Math.PI * item.x / a) * Math.cos(k * item.z - omega * t);
+                
+                let mag = Math.sqrt(Hx*Hx + Hz*Hz);
+                item.arrow.visible = showH;
+                if(mag > 0.01 && showH) {
+                    item.arrow.setDirection(new THREE.Vector3(Hx, 0, Hz).normalize());
+                    item.arrow.setLength(mag, 0.4, 0.3);
+                } else {
+                    item.arrow.visible = false;
+                }
+            });
+
+            jArrows.forEach(item => {
+                let Jy = -H0 * 1.5 * Math.cos(k * item.z - omega * t); 
+                item.arrow.visible = showJ;
+                if(Math.abs(Jy) > 0.01 && showJ) {
+                    item.arrow.setDirection(new THREE.Vector3(0, Math.sign(Jy), 0));
+                    item.arrow.setLength(Math.abs(Jy), 0.6, 0.4);
+                } else {
+                    item.arrow.visible = false;
+                }
+            });
+        }
+
+        const timeSlider = document.getElementById('time-slider');
+        
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (isPlaying) {
+                time += 0.03;
+                timeSlider.value = (time % 20);
+            } else {
+                time = parseFloat(timeSlider.value);
+            }
+
+            updateVectors(time);
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        
+        const btnPlay = document.getElementById('btn-play');
+        btnPlay.addEventListener('click', () => {
+            isPlaying = !isPlaying;
+            btnPlay.textContent = isPlaying ? "暂停" : "播放";
+            btnPlay.className = isPlaying ? 
+                "bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1 rounded shadow" : 
+                "bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded shadow";
+        });
+
+        timeSlider.addEventListener('input', () => {
+            isPlaying = false;
+            btnPlay.textContent = "播放";
+            btnPlay.className = "bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded shadow";
+        });
+
+        function setupToggle(btnId, stateVar, onToggle) {
+            const btn = document.getElementById(btnId);
+            btn.addEventListener('click', () => {
+                const newState = !eval(stateVar);
+                if(stateVar === 'showE') showE = newState;
+                if(stateVar === 'showH') showH = newState;
+                if(stateVar === 'showJ') showJ = newState;
+                if(stateVar === 'showN') showN = newState;
+                
+                if (newState) {
+                    btn.classList.add('active');
+                } else {
+                    btn.classList.remove('active');
+                }
+                if(onToggle) onToggle(newState);
+            });
+        }
+
+        setupToggle('btn-e', 'showE');
+        setupToggle('btn-h', 'showH');
+        setupToggle('btn-j', 'showJ');
+        setupToggle('btn-n', 'showN', (state) => {
+            nArrows.forEach(arr => arr.visible = state);
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        window.onload = function() {
+            animate();
+        };
+
+    </script>
+</body>
+</html>
